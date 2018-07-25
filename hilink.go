@@ -6,10 +6,8 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
-	"net/http/cookiejar"
 	"net/url"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -72,14 +70,15 @@ func NewClient(opts ...Option) (*Client, error) {
 
 	// start session
 	if !c.nostart {
-		// retrieve session id
-		sessID, tokID, err := c.NewSessionAndTokenID()
+		// retrieve token
+		tokID, err := c.NewTokenID()
 		if err != nil {
 			return nil, err
 		}
 
-		// set session id
-		err = c.SetSessionAndTokenID(sessID, tokID)
+		// set token
+		err = c.SetTokenID(tokID)
+
 		if err != nil {
 			return nil, err
 		}
@@ -91,7 +90,12 @@ func NewClient(opts ...Option) (*Client, error) {
 // createRequest creates a request for use with the Client.
 func (c *Client) createRequest(urlstr string, v interface{}) (*http.Request, error) {
 	if v == nil {
-		return http.NewRequest("GET", urlstr, nil)
+		req, err := http.NewRequest("GET", urlstr, nil)
+	        if err != nil {
+			return nil, err
+		}
+		req.Header.Set(TokenHeader, c.token)
+		return req, nil
 	}
 
 	// encode xml
@@ -99,7 +103,6 @@ func (c *Client) createRequest(urlstr string, v interface{}) (*http.Request, err
 	if err != nil {
 		return nil, err
 	}
-
 	// build req
 	req, err := http.NewRequest("POST", urlstr, body)
 	if err != nil {
@@ -144,7 +147,6 @@ func (c *Client) doReq(path string, v interface{}, takeFirstEl bool) (interface{
 	if tok != "" {
 		c.token = tok
 	}
-
 	// read body
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
@@ -236,61 +238,41 @@ func (c *Client) Do(path string, v interface{}) (XMLData, error) {
 	return d, nil
 }
 
-// NewSessionAndTokenID starts a session with the server, and returns the
+// NewTokenID starts a session with the server, and returns the
 // session and token.
-func (c *Client) NewSessionAndTokenID() (string, string, error) {
-	res, err := c.doReq("api/webserver/SesTokInfo", nil, true)
+func (c *Client) NewTokenID() (string, error) {
+	res, err := c.doReq("api/webserver/token", nil, true)
+
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
 
 	// convert
 	vals, ok := res.(map[string]interface{})
 	if !ok {
-		return "", "", ErrInvalidResponse
+		return "", ErrInvalidResponse
 	}
 
-	// check ses/tokInfo present
-	sesInfo, ok := vals["SesInfo"]
+	// check tokInfo present
+	tokInfo, ok := vals["token"]
 	if !ok {
-		return "", "", ErrInvalidResponse
-	}
-	tokInfo, ok := vals["TokInfo"]
-	if !ok {
-		return "", "", ErrInvalidResponse
+		return "", ErrInvalidResponse
 	}
 
 	// convert to strings
-	s, ok := sesInfo.(string)
-	if !ok || !strings.HasPrefix(s, "SessionID=") {
-		return "", "", ErrInvalidResponse
-	}
 	t, ok := tokInfo.(string)
 	if !ok {
-		return "", "", ErrInvalidResponse
+		return "", ErrInvalidResponse
 	}
 
-	return s[len("SessionID="):], t, nil
+	return t, nil
 }
 
-// SetSessionAndTokenID sets the sessionID and tokenID for the Client.
-func (c *Client) SetSessionAndTokenID(sessionID, tokenID string) error {
+// SetTokenID sets the tokenID for the Client.
+func (c *Client) SetTokenID(tokenID string) error {
 	c.Lock()
 	defer c.Unlock()
 
-	var err error
-
-	// create cookie jar
-	c.client.Jar, err = cookiejar.New(nil)
-	if err != nil {
-		return err
-	}
-
-	// set values on client
-	c.client.Jar.SetCookies(c.url, []*http.Cookie{&http.Cookie{
-		Name:  "SessionID",
-		Value: sessionID,
-	}})
 	c.token = tokenID
 
 	return nil
